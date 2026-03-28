@@ -310,13 +310,14 @@ static void parameterChanged( _NT_algorithm* self, int p )
 		pThis->slewCoeff = 0.00005f + pct * pct * 0.05f;
 	}
 
-	// When loop steps changes, reset loop state for that channel
+	// Any per-channel parameter change resets that channel's loop so
+	// the new setting (range, polarity, type, loop length, etc.) is
+	// reflected in the recorded values.
 	if ( p >= kNumGlobalParams )
 	{
-		int chParam = ( p - kNumGlobalParams ) % kNumPerChParams;
-		if ( chParam == kPerChLoopSteps )
+		int ch = ( p - kNumGlobalParams ) / kNumPerChParams;
+		if ( ch < pThis->numChannels )
 		{
-			int ch = ( p - kNumGlobalParams ) / kNumPerChParams;
 			pThis->channels[ch].loopPos = 0;
 			pThis->channels[ch].loopFilled = 0;
 		}
