@@ -219,7 +219,7 @@ static _NT_algorithm* construct( const _NT_algorithmMemoryPtrs& ptrs,
 	// Init state
 	self->triggerHigh = false;
 	self->slewCoeff = 0.001f;
-	self->rng.seed( 42 );
+	self->rng.seed( NT_getCpuCycleCount() ^ (uint32_t)(uintptr_t)self );
 
 	for ( int i = 0; i < kMaxChannels; ++i )
 	{
@@ -358,7 +358,7 @@ static void step( _NT_algorithm* self, float* busFrames, int numFramesBy4 )
 
 	for ( int i = 0; i < numFrames; ++i )
 	{
-		// Trigger detection (rising edge above 1V)
+		// Trigger detection (rising edge above 5V / 1.0 bus units)
 		bool triggered = false;
 		if ( trigIn )
 		{
@@ -384,7 +384,7 @@ static void step( _NT_algorithm* self, float* busFrames, int numFramesBy4 )
 					if ( roll < skipPcts[ch] )
 					{
 						cs.skipFlash = kFlashDuration;
-						goto write_output;
+						continue;
 					}
 				}
 
@@ -419,6 +419,8 @@ static void step( _NT_algorithm* self, float* busFrames, int numFramesBy4 )
 
 						cs.loopBuffer[cs.loopFilled] = newVal;
 						cs.loopFilled++;
+						if ( cs.loopFilled == loopLen )
+							cs.loopPos = 0;
 						cs.targetValue = newVal;
 						if ( types[ch] == kTypeStepped )
 							cs.currentValue = newVal;
@@ -434,7 +436,6 @@ static void step( _NT_algorithm* self, float* busFrames, int numFramesBy4 )
 					}
 				}
 
-				write_output: (void)0;
 			}
 		}
 
@@ -688,8 +689,10 @@ static void serialise( _NT_algorithm* self, _NT_jsonStream& stream )
 	SuperRandom* pThis = static_cast<SuperRandom*>( self );
 
 	// Save PRNG state
-	stream.addMemberName( "rng" );
-	stream.addNumber( (int)pThis->rng.state );
+	stream.addMemberName( "rngHi" );
+	stream.addNumber( (int)( pThis->rng.state >> 16 ) );
+	stream.addMemberName( "rngLo" );
+	stream.addNumber( (int)( pThis->rng.state & 0xFFFF ) );
 
 	// Save per-channel state
 	stream.addMemberName( "channels" );
@@ -734,10 +737,25 @@ static bool deserialise( _NT_algorithm* self, _NT_jsonParse& parse )
 	{
 		if ( parse.matchName( "rng" ) )
 		{
+			// Legacy format: single int
 			int rngState;
 			if ( !parse.number( rngState ) )
 				return false;
 			pThis->rng.seed( (uint32_t)rngState );
+		}
+		else if ( parse.matchName( "rngHi" ) )
+		{
+			int hi;
+			if ( !parse.number( hi ) )
+				return false;
+			pThis->rng.state = ( pThis->rng.state & 0xFFFF ) | ( (uint32_t)hi << 16 );
+		}
+		else if ( parse.matchName( "rngLo" ) )
+		{
+			int lo;
+			if ( !parse.number( lo ) )
+				return false;
+			pThis->rng.state = ( pThis->rng.state & 0xFFFF0000u ) | ( (uint32_t)lo & 0xFFFF );
 		}
 		else if ( parse.matchName( "channels" ) )
 		{
@@ -780,6 +798,8 @@ static bool deserialise( _NT_algorithm* self, _NT_jsonParse& parse )
 						if ( !parse.number( v ) )
 							return false;
 						cs.loopPos = v;
+						if ( cs.loopPos >= kMaxLoopSteps )
+							cs.loopPos = 0;
 					}
 					else if ( parse.matchName( "filled" ) )
 					{
